@@ -37,7 +37,7 @@ with st.sidebar:
         "🟩 Green Pulse: Dump Valve Active\n\n"
         "🔵 Blue Pulse: Dump Valve Closure\n\n"
     )
-    if os.getenv("GOOGLE_API_KEY"):
+    if os.getenv("GEMINI_API_KEY"):
         st.success("System Status: Online 🟢")
     else:
         st.error("System Status: Offline 🔴")
