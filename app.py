@@ -140,7 +140,8 @@ def analyze_pdf(file_path):
         if image is None:
             return "Error: Could not extract image from PDF"
 
-        model = genai.GenerativeModel("models/gemini-1.0-pro")
+        # Use the correct multimodal model name
+        model = genai.GenerativeModel("gemini-1.5-flash")
 
         response = model.generate_content(
             [
@@ -153,7 +154,7 @@ def analyze_pdf(file_path):
 
     except Exception as e:
         return f"Error: {e}"
-
+        
 # ===============================
 # UI
 # ===============================
