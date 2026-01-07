@@ -1,0 +1,527 @@
+import streamlit as st
+from google import genai
+from google.genai import types
+import tempfile
+import os
+from fpdf import FPDF
+from PIL import Image
+import fitz  # PyMuPDF for PDF to image conversion
+import base64
+from datetime import datetime
+
+from io import BytesIO
+
+# --- Page Configuration ---
+st.set_page_config(
+    page_title="WSP Graph Analyzer",
+    page_icon="🚄",
+    layout="wide"
+)
+
+# --- Backend Configuration ---
+if "GEMINI_API_KEY" in st.secrets:
+    API_KEY = st.secrets["GEMINI_API_KEY"]
+elif os.getenv("GEMINI_API_KEY"):
+    API_KEY = os.getenv("GEMINI_API_KEY")
+else:
+    # REPLACE THIS WITH YOUR NEW KEY
+    API_KEY = "YOUR_API_KEY_HERE"
+
+# --- Sidebar ---
+with st.sidebar:
+    st.header("System Logic")
+    st.info(
+        "**Graph Rules:**\n\n"
+        "🔴 **Red Line:** Reference Speed\n\n"
+        "🎨 **Colors:** Axle Speeds\n\n"
+        "📉 **Fluctuation:** Defect detected\n\n"
+        "🟩 **Green Pulse:** Dump Valve Active"
+    )
+    if API_KEY and API_KEY != "YOUR_API_KEY_HERE":
+        st.success("System Status: Online 🟢")
+    else:
+        st.error("System Status: Offline 🔴")
+
+# --- Helper: Convert PDF to Image ---
+def pdf_to_image(pdf_path):
+    """Convert first page of PDF to image"""
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc[0]  # Get first page
+        
+        # Render page to image with high resolution
+        mat = fitz.Matrix(2, 2)  # 2x zoom for better quality
+        pix = page.get_pixmap(matrix=mat)
+        
+        # Convert to PIL Image
+        img_data = pix.tobytes("png")
+        img = Image.open(BytesIO(img_data))
+        
+        doc.close()
+        return img
+    except Exception as e:
+        st.error(f"Error converting PDF to image: {e}")
+        return None
+
+# --- Helper: Extract Graph Period from Image using OCR ---
+def extract_graph_period(pdf_path):
+    """Extract graph period from PDF using text extraction"""
+    try:
+        doc = fitz.open(pdf_path)
+        page = doc[0]
+        text = page.get_text()
+        
+        # Look for date patterns like "18.01.25 07:10:24"
+        date_pattern = r'\d{2}\.\d{2}\.\d{2}\s+\d{2}:\d{2}:\d{2}'
+        dates = re.findall(date_pattern, text)
+        
+        if len(dates) >= 2:
+            return f"{dates[0]} to {dates[-1]}"
+        elif len(dates) == 1:
+            return dates[0]
+        
+        doc.close()
+        return "Not Available"
+    except:
+        return "Not Available"
+
+# --- Helper: Create PDF from Text with Image ---
+# def create_pdf_with_image(text_content, image_path=None):
+#     """Create PDF report with embedded graph image"""
+#     pdf = FPDF()
+#     pdf.add_page()
+    
+#     # Add Title on First Page
+#     pdf.set_font("Arial", style="B", size=16)
+#     pdf.cell(0, 10, txt="WSP Diagnostic Report", ln=True, align='C')
+#     pdf.ln(10)
+    
+#     # Add Graph Image on First Page (if available)
+#     if image_path and os.path.exists(image_path):
+#         try:
+#             # Open image to get actual dimensions
+#             img = Image.open(image_path)
+#             img_width, img_height = img.size
+            
+#             # Calculate scaled dimensions to fit page width
+#             page_width = pdf.w - 20  # Leave 10mm margins on each side
+#             scale_factor = page_width / img_width
+#             scaled_height_px = img_height * scale_factor
+            
+#             # Convert pixels to mm (96 DPI standard)
+#             scaled_height_mm = (scaled_height_px / 96) * 25.4
+            
+#             # Get current Y position
+#             current_y = pdf.get_y()
+            
+#             # Calculate max available height on first page
+#             max_height = pdf.h - current_y - 20  # Leave 20mm bottom margin
+            
+#             # If image is too tall, scale it down to fit first page
+#             if scaled_height_mm > max_height:
+#                 scale_factor_height = max_height / scaled_height_mm
+#                 final_width = page_width * scale_factor_height
+#                 pdf.image(image_path, x=10 + (page_width - final_width) / 2, y=current_y, w=final_width)
+#             else:
+#                 # Insert image centered on page
+#                 pdf.image(image_path, x=10, y=current_y, w=page_width)
+            
+#         except Exception as e:
+#             pdf.set_font("Arial", size=10)
+#             pdf.cell(0, 10, txt=f"[Image could not be embedded: {e}]", ln=True)
+    
+#     # FORCE NEW PAGE - Content always starts on page 2
+#     pdf.add_page()
+    
+#     # Add Report Header on Second Page
+#     pdf.set_font("Arial", style="B", size=14)
+#     pdf.cell(0, 10, txt="Analysis Report", ln=True)
+#     pdf.ln(5)
+    
+#     # Add separator line
+#     pdf.set_draw_color(150, 150, 150)
+#     pdf.line(10, pdf.get_y(), pdf.w - 10, pdf.get_y())
+#     pdf.ln(8)
+    
+#     # Add Body Text
+#     pdf.set_font("Arial", size=11)
+#     safe_text = text_content.encode('latin-1', 'replace').decode('latin-1')
+#     pdf.multi_cell(0, 6, txt=safe_text)
+    
+#     return pdf.output(dest='S').encode('latin-1')
+
+def create_pdf_with_image(
+    text_content,
+    image_path=None,
+    graph_pdf_path=None
+):
+    """Create PDF report with cover page, graph image, and analysis"""
+
+    pdf = FPDF()
+
+    # ============================================================
+    # COVER PAGE
+    # ============================================================
+    pdf.add_page()
+
+    # Full-page background color
+    pdf.set_fill_color(70, 130, 180)
+    pdf.rect(0, 0, pdf.w, pdf.h, style='F')
+
+    pdf.set_text_color(255, 255, 255)
+
+    # Move cursor to vertical center
+    pdf.set_y(pdf.h / 2 - 30)
+
+    # Main Heading
+    pdf.set_font("Arial", style="B", size=22)
+    pdf.cell(
+        0,
+        15,
+        "WSP GRAPH SUMMARY",
+        ln=True,
+        align="C",
+        fill=False
+    )
+
+    pdf.ln(10)
+
+    # Generated Time
+    pdf.set_font("Arial", size=12)
+    generated_time = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
+    pdf.cell(
+        0,
+        10,
+        f"Generated Time : {generated_time}",
+        ln=True,
+        align="C"
+    )
+
+    pdf.ln(5)
+
+    # Graph Timestamp (from OCR function)
+    graph_period = "Not Available"
+    if graph_pdf_path:
+        graph_period = extract_graph_period(graph_pdf_path)
+
+    pdf.cell(
+        0,
+        10,
+        f"Graph Timestamp : {graph_period}",
+        ln=True,
+        align="C"
+    )
+
+    # Reset text color for next pages
+    pdf.set_text_color(0, 0, 0)
+
+    # ============================================================
+    # GRAPH PAGE
+    # ============================================================
+    pdf.add_page()
+
+    # Title
+    pdf.set_font("Arial", style="B", size=16)
+    pdf.cell(0, 10, "WSP Diagnostic Report", ln=True, align="C")
+    pdf.ln(10)
+
+    # Add Graph Image
+    if image_path and os.path.exists(image_path):
+        try:
+            img = Image.open(image_path)
+            img_width, img_height = img.size
+
+            page_width = pdf.w - 20
+            scale_factor = page_width / img_width
+            scaled_height_px = img_height * scale_factor
+            scaled_height_mm = (scaled_height_px / 96) * 25.4
+
+            current_y = pdf.get_y()
+            max_height = pdf.h - current_y - 20
+
+            if scaled_height_mm > max_height:
+                scale_factor_height = max_height / scaled_height_mm
+                final_width = page_width * scale_factor_height
+                pdf.image(
+                    image_path,
+                    x=10 + (page_width - final_width) / 2,
+                    y=current_y,
+                    w=final_width
+                )
+            else:
+                pdf.image(image_path, x=10, y=current_y, w=page_width)
+
+        except Exception as e:
+            pdf.set_font("Arial", size=10)
+            pdf.cell(
+                0,
+                10,
+                f"[Image could not be embedded: {e}]",
+                ln=True
+            )
+
+    # ============================================================
+    # ANALYSIS PAGE
+    # ============================================================
+    pdf.add_page()
+
+    pdf.set_font("Arial", style="B", size=14)
+    pdf.cell(0, 10, "Analysis Report", ln=True)
+    pdf.ln(5)
+
+    pdf.set_draw_color(150, 150, 150)
+    pdf.line(10, pdf.get_y(), pdf.w - 10, pdf.get_y())
+    pdf.ln(8)
+
+    pdf.set_font("Arial", size=11)
+    safe_text = text_content.encode('latin-1', 'replace').decode('latin-1')
+    pdf.multi_cell(0, 6, safe_text)
+
+    return pdf.output(dest="S").encode("latin-1")
+
+
+# # --- Helper: Create Text File with Base64 Image ---
+def create_text_with_image_info(text_content, image_path=None):
+    """Create text file with image reference"""
+    output = "=" * 60 + "\n"
+    output += "WSP DIAGNOSTIC REPORT\n"
+    output += "=" * 60 + "\n\n"
+    
+    if image_path and os.path.exists(image_path):
+        output += "[GRAPH IMAGE INCLUDED - See attached or PDF version]\n"
+        output += f"Image saved as: {os.path.basename(image_path)}\n\n"
+    
+    output += "-" * 60 + "\n"
+    output += "ANALYSIS REPORT\n"
+    output += "-" * 60 + "\n\n"
+    output += text_content
+    
+    return output
+
+# --- Main Interface ---
+st.title("🚄 WSP Operational Data Analyzer")
+uploaded_file = st.file_uploader("Choose a PDF Graph file", type=["pdf"])
+
+# --- Analysis Logic ---
+def analyze_pdf(file_path, key):
+    if not key or key == "YOUR_API_KEY_HERE":
+        return "Error: Invalid API Key."
+
+    try:
+        client = genai.Client(api_key=key)
+        
+        with open(file_path, "rb") as f:
+            file_content = f.read()
+
+        prompt = """
+        You are an expert railway braking systems analyst and WSP (Wheel Slide Protection) system engineer.
+
+Your task is to analyze and summarize a train operational graph based on the following complete technical context. Use this knowledge strictly while generating the report. Do not assume missing information. Do not hallucinate. Base conclusions only on given definitions and observed behaviors.
+
+====================
+GRAPH OVERVIEW
+====================
+The graph represents:
+- Speed of individual axles
+- Reference train speed
+- Dump valve activities
+plotted against time.
+
+X-axis:
+- Timestamp (time progression during train operation)
+
+Y-axis:
+- Speed values of axles and reference train speed
+- Dump valve activation states
+
+====================
+LINE COLOR DEFINITIONS
+====================
+
+Reference Speed:
+- Red line (#FE0000)
+- Indicates the reference speed of the train
+- All axle speeds should follow this line under normal conditions
+
+Axle Speed Lines:
+- Green line (#00FF01): Speed of Axle 1
+- Yellow line (#FFFF00): Speed of Axle 2
+- Blue line (#0000FE): Speed of Axle 3
+- Pink line (#FF00FE): Speed of Axle 4
+
+Normal Operation Condition:
+- When all four axle speed lines follow the red reference speed line smoothly
+- Conclusion: Train operation and WSP system are functioning correctly
+
+====================
+FAULT / ANOMALY IDENTIFICATION
+====================
+
+If any axle speed line:
+- Fluctuates
+- Deviates
+- Drops below the red reference speed line
+
+Then:
+- That specific axle is affected
+- Indicates possible wheel slip, mechanical defect, or traction issue
+
+Example:
+- If the pink line fluctuates or drops below the red line
+- Conclusion: Axle 4 has a defect or speed mismatch
+
+====================
+WSP DUMP VALVE OPERATION
+====================
+
+Purpose of Dump Valve:
+- Restore axle speed to match reference speed
+- Prevent wheel slide
+- Maintain safe braking and traction
+
+Dump Valve Activation Representation:
+- Shown as blue shaded regions on the graph
+- Labeled as (1)BV-Axle to (4)BV-Axle
+
+Dump Valve Color Coding:
+- #9A99FF : Dump valve activation for Axle 1
+- #6599FF : Dump valve activation for Axle 2
+- #6665FE : Dump valve activation for Axle 3
+- #3401CC : Dump valve activation for Axle 4
+
+====================
+WSP SYSTEM HEALTH LOGIC
+====================
+
+Correct WSP Operation:
+- If an axle speed line starts fluctuating
+- The corresponding dump valve activation line should activate immediately
+- This indicates WSP is functioning correctly
+
+Example:
+- Green axle speed line fluctuates
+- #9A99FF dump valve line activates
+- Axle 1 speed regains reference speed
+- Conclusion: WSP for Axle 1 is working properly
+
+Incorrect WSP Operation:
+- If axle speed fluctuates
+- But corresponding dump valve activation does NOT occur immediately
+- Conclusion: WSP malfunction
+- Maintenance is required for that axle or dump valve
+
+====================
+DUMP VALVE CLOSING
+====================
+
+- After axle speed regains and matches reference speed
+- Dump valve closes automatically
+- Represented by green shaded regions on the graph
+- Indicates stabilization and restoration of normal operation
+
+====================
+EXPECTED OUTPUT
+====================
+
+Using the above knowledge, generate:
+- A concise but technically accurate summary report for the given graph
+- Identify which axles are normal or affected
+- Explain dump valve activations and closures
+- Conclude whether the WSP system is functioning correctly or needs maintenance
+- Maintain professional railway engineering terminology
+
+        """
+
+        response = client.models.generate_content(
+            model="gemini-flash-latest",
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_text(text=prompt),
+                        types.Part.from_bytes(data=file_content, mime_type="application/pdf")
+                    ]
+                )
+            ]
+        )
+        return response.text
+            
+    except Exception as e:
+        return f"An error occurred: {e}"
+
+# --- Execution ---
+if uploaded_file and st.button("Generate Diagnostic Report"):
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+        tmp_file.write(uploaded_file.getvalue())
+        tmp_path = tmp_file.name
+
+    with st.spinner("Analyzing with Gemini Flash Latest..."):
+        # Convert PDF to image
+        graph_image = pdf_to_image(tmp_path)
+        
+        # Save image temporarily
+        img_temp_path = None
+        if graph_image:
+            img_temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
+            graph_image.save(img_temp_path)
+        
+        # Generate analysis report
+        report = analyze_pdf(tmp_path, API_KEY)
+        
+        if "Error" in report:
+            st.error(report)
+        else:
+            # Display Graph Image
+            if graph_image:
+                st.subheader("📊 Uploaded Graph")
+                st.image(graph_image, caption="WSP Operational Graph", width='stretch')
+                st.divider()
+            
+            # Display Report
+            st.subheader("📋 Analysis Result")
+            st.markdown(report)
+            st.divider()
+            
+            # --- Download Buttons Section ---
+            st.subheader("📥 Download Options")
+            col1, col2, col3 = st.columns(3)
+            
+            # 1. Download Graph Image
+            if graph_image and img_temp_path:
+                with col1:
+                    with open(img_temp_path, "rb") as img_file:
+                        st.download_button(
+                            label="🖼️ Download Graph Image (.png)",
+                            data=img_file.read(),
+                            file_name="WSP_Graph.png",
+                            mime="image/png",
+                        )
+            
+            # 2. Download as Text File
+            with col2:
+                text_content = create_text_with_image_info(report, img_temp_path)
+                st.download_button(
+                    label="📄 Download Report (.txt)",
+                    data=text_content,
+                    file_name="WSP_Analysis_Report.txt",
+                    mime="text/plain",
+                )
+            
+            # 3. Download as PDF with Image
+            with col3:
+                try:
+                    pdf_data = create_pdf_with_image(report, img_temp_path)
+                    st.download_button(
+                        label="📕 Download Full Report (.pdf)",
+                        data=pdf_data,
+                        file_name="WSP_Analysis_Report.pdf",
+                        mime="application/pdf",
+                    )
+                except Exception as e:
+                    st.warning(f"PDF generation failed: {e}")
+        
+        # Cleanup temporary files
+        if img_temp_path and os.path.exists(img_temp_path):
+            os.unlink(img_temp_path)
+    
+    os.unlink(tmp_path)
