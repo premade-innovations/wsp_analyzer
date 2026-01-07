@@ -139,7 +139,7 @@ def analyze_pdf(file_path):
         with open(file_path, "rb") as f:
             pdf_bytes = f.read()
 
-        model = genai.GenerativeModel("gemini-1.5-flash")
+        model = genai.GenerativeModel("models/gemini-1.5-flash-latest")
 
         response = model.generate_content(
             [
