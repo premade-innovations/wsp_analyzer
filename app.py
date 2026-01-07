@@ -1,12 +1,6 @@
-# #this library for desktop app
-# import tkinter as tk
-# from tkinter import filedialog
-
 import streamlit as st
-# from google import genai
 import os
 import google.generativeai as genai
-# from google.genai import types
 import tempfile
 
 from fpdf import FPDF
@@ -15,7 +9,10 @@ import fitz  # PyMuPDF for PDF to image conversion
 from datetime import datetime
 import re
 from io import BytesIO
+
+# Configure Gemini API
 genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
+
 # --- Page Configuration ---
 st.set_page_config(
     page_title="WSP Graph Analyzer",
@@ -46,7 +43,23 @@ with st.sidebar:
         st.success("System Status: Online 🟢")
     else:
         st.error("System Status: Offline 🔴")
-
+    
+    # Debug: Show available models
+    if st.checkbox("Show Available Models (Debug)"):
+        with st.spinner("Fetching models..."):
+            try:
+                st.write("**Available Gemini Models:**")
+                models_found = []
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        models_found.append(m.name)
+                        st.write(f"✅ `{m.name}`")
+                
+                if not models_found:
+                    st.error("⚠️ No models found!")
+                    
+            except Exception as e:
+                st.error(f"Could not list models: {e}")
 
 # --- Helper: Convert PDF to Image ---
 def pdf_to_image(pdf_path):
@@ -126,11 +139,10 @@ class EnhancedPDF(FPDF):
     
     def add_table(self, headers, rows):
         """Add formatted table with dynamic sizing"""
-        # Calculate optimal column widths based on content
         num_cols = len(headers)
-        available_width = self.w - 20  # Total width minus margins
+        available_width = self.w - 20
         
-        # Analyze content to determine optimal widths
+        # Calculate optimal column widths
         max_content_lengths = []
         for col_idx in range(num_cols):
             max_len = len(str(headers[col_idx]))
@@ -139,19 +151,15 @@ class EnhancedPDF(FPDF):
                     max_len = max(max_len, len(str(row[col_idx])))
             max_content_lengths.append(max_len)
         
-        # Calculate proportional widths
         total_content = sum(max_content_lengths)
         if total_content > 0:
             col_widths = [(length / total_content) * available_width for length in max_content_lengths]
-            # Ensure minimum width of 20mm per column
             col_widths = [max(20, w) for w in col_widths]
-            # Adjust if total exceeds available width
             total_width = sum(col_widths)
             if total_width > available_width:
                 scale = available_width / total_width
                 col_widths = [w * scale for w in col_widths]
         else:
-            # Equal distribution if no content
             col_widths = [available_width / num_cols] * num_cols
         
         # Check if table fits on page
@@ -163,7 +171,6 @@ class EnhancedPDF(FPDF):
         self.set_fill_color(52, 152, 219)
         self.set_text_color(255, 255, 255)
         
-        # Calculate header height
         header_height = 10
         max_header_lines = 1
         for i, header in enumerate(headers):
@@ -173,7 +180,6 @@ class EnhancedPDF(FPDF):
             max_header_lines = max(max_header_lines, lines_needed)
         header_height = max(10, max_header_lines * 5)
         
-        # Draw header cells
         x_start = self.get_x()
         y_start = self.get_y()
         
@@ -181,11 +187,9 @@ class EnhancedPDF(FPDF):
             clean_header = str(header).replace('**', '').strip()
             clean_header = clean_header.encode('ascii', 'ignore').decode('ascii')
             
-            # Draw border
             self.set_xy(x_start + sum(col_widths[:i]), y_start)
             self.cell(col_widths[i], header_height, '', 1, 0, 'C', True)
             
-            # Add text
             self.set_xy(x_start + sum(col_widths[:i]) + 1, y_start + 1)
             self.multi_cell(col_widths[i] - 2, 4, clean_header, 0, 'C')
         
@@ -196,12 +200,10 @@ class EnhancedPDF(FPDF):
         self.set_text_color(0, 0, 0)
         
         for row_idx, row in enumerate(rows):
-            # Clean and prepare all cells
             cleaned_cells = []
             cell_line_counts = []
             
             for i, cell in enumerate(row):
-                # Clean text
                 clean_cell = str(cell).replace('**', '').strip()
                 clean_cell = clean_cell.replace('\u2019', "'").replace('\u2018', "'")
                 clean_cell = clean_cell.replace('\u201c', '"').replace('\u201d', '"')
@@ -209,7 +211,6 @@ class EnhancedPDF(FPDF):
                 safe_cell = clean_cell.encode('ascii', 'ignore').decode('ascii')
                 cleaned_cells.append(safe_cell)
                 
-                # Calculate lines needed using word wrapping
                 chars_per_line = int(col_widths[i] * 2.2)
                 words = safe_cell.split()
                 lines = []
@@ -229,45 +230,32 @@ class EnhancedPDF(FPDF):
                 
                 cell_line_counts.append(max(1, len(lines)))
             
-            # Calculate row height
             max_lines = max(cell_line_counts) if cell_line_counts else 1
-            row_height = max(10, max_lines * 4 + 2)  # 4mm per line + 2mm padding
+            row_height = max(10, max_lines * 4 + 2)
             
-            # Check if row fits on page
             if self.get_y() + row_height > self.h - 20:
                 self.add_page()
                 self.set_xy(x_start, self.get_y())
             
-            # Set alternating colors
             if row_idx % 2 == 0:
                 self.set_fill_color(255, 255, 255)
             else:
                 self.set_fill_color(245, 245, 245)
             
-            # Get current position
             x_pos = self.get_x()
             y_pos = self.get_y()
             
-            # Draw all cell borders first
             for i in range(len(cleaned_cells)):
                 self.set_xy(x_pos + sum(col_widths[:i]), y_pos)
                 self.cell(col_widths[i], row_height, '', 1, 0, 'L', True)
             
-            # Add text to each cell
             for i, cell_text in enumerate(cleaned_cells):
                 cell_x = x_pos + sum(col_widths[:i]) + 1
                 cell_y = y_pos + 1
                 
                 self.set_xy(cell_x, cell_y)
-                
-                # Use multi_cell for automatic wrapping
-                # Calculate available height
-                available_height = row_height - 2
-                
-                # Add text with wrapping
                 self.multi_cell(col_widths[i] - 2, 3.5, cell_text, 0, 'L')
             
-            # Move to next row
             self.set_xy(x_pos, y_pos + row_height)
         
         self.ln(5)
@@ -277,35 +265,29 @@ def create_pdf_with_image(text_content, image_path, graph_period):
     """Create PDF report with proper markdown parsing"""
     pdf = EnhancedPDF()
     
-    # ===== COVER PAGE =====
+    # COVER PAGE
     pdf.add_page()
     generated_time = datetime.now().strftime("%d-%m-%Y %H:%M:%S")
     
-    # Full-page background color
     pdf.set_fill_color(70, 130, 180)
     pdf.rect(0, 0, pdf.w, pdf.h, style='F')
     pdf.set_text_color(255, 255, 255)
     
-    # Move to center
     pdf.set_y(pdf.h / 2 - 30)
-    
-    # Title
     pdf.set_font('Arial', 'B', 24)
     pdf.ln(20)
     pdf.cell(0, 15, 'WSP GRAPH SUMMARY', 0, 1, 'C')
     pdf.ln(10)
     
-    # Metadata
     pdf.set_font('Arial', '', 12)
     pdf.cell(0, 8, f'Generated Time : {generated_time}', 0, 1, 'C')
     pdf.cell(0, 8, f'Graph Timestamp : {graph_period}', 0, 1, 'C')
     pdf.ln(30)
     
-    # Company branding
     pdf.set_font("Arial", 'I', size=9)
     pdf.cell(0, 5, "This report is generated by Premade Innovations Pvt. Ltd.", 0, 1, 'C')
     
-    # ===== GRAPH IMAGE PAGE =====
+    # GRAPH IMAGE PAGE
     pdf.add_page()
     pdf.set_text_color(0, 0, 0)
     
@@ -331,14 +313,12 @@ def create_pdf_with_image(text_content, image_path, graph_period):
             pdf.set_font('Arial', '', 10)
             pdf.cell(0, 10, f'[Image could not be embedded: {e}]', 0, 1)
     
-    # ===== ANALYSIS CONTENT PAGE =====
+    # ANALYSIS CONTENT PAGE
     pdf.add_page()
     pdf.add_heading('Analysis Report', level=1)
     
-    # Add current date and graph timestamp
     current_date = datetime.now().strftime("%d-%m-%Y")
     
-    # Add Date of Analysis section
     pdf.add_heading('Date of Analysis', level=2)
     pdf.add_paragraph(current_date)
     pdf.add_heading('Graph Timestamp', level=2)
@@ -355,13 +335,10 @@ def create_pdf_with_image(text_content, image_path, graph_period):
         if not line:
             continue
         
-        # Skip markdown separator lines
         if line.startswith('|') and all(c in '|:-' for c in line.replace(' ', '')):
             continue
         
-        # Detect headings (## 1. or ## Date of Analysis, etc.)
         if line.startswith('##'):
-            # Close any open table
             if in_table and len(table_data) > 1:
                 pdf.add_table(table_data[0], table_data[1:])
                 in_table = False
@@ -369,7 +346,6 @@ def create_pdf_with_image(text_content, image_path, graph_period):
             
             heading_text = line.replace('##', '').strip()
             
-            # Skip Date of Analysis section as we already added it
             if 'Date of Analysis' in heading_text or heading_text.startswith('Date'):
                 skip_date_section = True
                 continue
@@ -377,7 +353,6 @@ def create_pdf_with_image(text_content, image_path, graph_period):
             skip_date_section = False
             pdf.add_heading(heading_text, level=2)
         
-        # Detect tables
         elif '|' in line and not skip_date_section:
             parts = [p.strip() for p in line.split('|') if p.strip()]
             if parts:
@@ -387,7 +362,6 @@ def create_pdf_with_image(text_content, image_path, graph_period):
                 else:
                     table_data.append(parts)
         
-        # Regular text
         else:
             if not skip_date_section:
                 if in_table and len(table_data) > 1:
@@ -398,7 +372,6 @@ def create_pdf_with_image(text_content, image_path, graph_period):
                 if not line.startswith('---') and line:
                     pdf.add_paragraph(line)
     
-    # Add remaining table
     if in_table and len(table_data) > 1:
         pdf.add_table(table_data[0], table_data[1:])
     
@@ -428,21 +401,17 @@ def create_text_with_image_info(text_content, image_path, graph_period):
     
     return output
 
-
 # --- Main Interface ---
 st.title("🚄 WSP Operational Graph Analyzer")
 uploaded_file = st.file_uploader("Choose a PDF Graph file", type=["pdf"])
 
-# --- Analysis Logic ---
-def analyze_pdf(file_path, key):
-    if not key or key == "YOUR_API_KEY_HERE":
-        return "Error: Invalid API Key."
-
+# --- Analysis Logic (FIXED) ---
+def analyze_pdf(file_path):
     try:
-        client = genai.Client(api_key=key)
-        
-        with open(file_path, "rb") as f:
-            file_content = f.read()
+        # Convert PDF to image for analysis
+        image = pdf_to_image(file_path)
+        if image is None:
+            return "Error: Could not extract image from PDF"
 
         prompt = """
 You are an expert railway braking systems analyst and WSP (Wheel Slide Protection) system engineer.
@@ -551,31 +520,19 @@ CRITICAL INSTRUCTIONS
 6. Use professional railway engineering terminology
 7. Be concise but technically accurate
 8. If you cannot determine something, state "Cannot determine from graph" rather than guessing
+"""
 
-        """
-
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_text(text=prompt),
-                        types.Part.from_bytes(data=file_content, mime_type="application/pdf")
-                    ]
-                )
-            ]
-        )
+        # Use the correct API method
+        model = genai.GenerativeModel('gemini-1.5-flash-latest')
+        response = model.generate_content([prompt, image])
         
-        if response and hasattr(response, 'text'):
-            return response.text if response.text else "Error: Empty response from AI"
+        if response and response.text:
+            return response.text
         else:
-            return "Error: Invalid response format from AI"
+            return "Error: Empty response from AI"
             
     except Exception as e:
         return f"An error occurred: {str(e)}"
-
-
 
 # --- Execution ---
 if uploaded_file and st.button("Generate Diagnostic Report"):
@@ -583,26 +540,20 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
         tmp_file.write(uploaded_file.getvalue())
         tmp_path = tmp_file.name
 
-    with st.spinner("Analyzing with Gemini Flash Latest..."):
-        # Extract graph period
+    with st.spinner("Analyzing with Gemini..."):
         graph_period = extract_graph_period(tmp_path)
-        
-        # Convert PDF to image
         graph_image = pdf_to_image(tmp_path)
         
-        # Save image temporarily
         img_temp_path = None
         if graph_image:
             img_temp_path = tempfile.NamedTemporaryFile(delete=False, suffix=".png").name
             graph_image.save(img_temp_path)
         
-        # Generate analysis report
-        report = analyze_pdf(tmp_path, API_KEY)
+        report = analyze_pdf(tmp_path)
         
         if report is None or "Error" in str(report):
             st.error(report if report else "Analysis failed - No response received")
         else:
-            # Display metadata
             col_meta1, col_meta2 = st.columns(2)
             with col_meta1:
                 st.info(f"**Generated Time:** {datetime.now().strftime('%d-%m-%Y %H:%M:%S')}")
@@ -611,22 +562,18 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
             
             st.divider()
             
-            # Display Graph Image
             if graph_image:
                 st.subheader("📊 Uploaded Graph")
-                st.image(graph_image, caption="WSP Operational Graph", width='stretch')
+                st.image(graph_image, caption="WSP Operational Graph", use_container_width=True)
                 st.divider()
             
-            # Display Report
             st.subheader("📋 Analysis Result")
             st.markdown(report)
             st.divider()
             
-            # Download Options
             st.subheader("📥 Download Options")
             col1, col2, col3 = st.columns(3)
             
-            # Download Graph Image
             if graph_image and img_temp_path:
                 with col1:
                     with open(img_temp_path, "rb") as img_file:
@@ -637,7 +584,6 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
                             mime="image/png",
                         )
             
-            # Download Text Report
             with col2:
                 text_content = create_text_with_image_info(report, img_temp_path, graph_period)
                 st.download_button(
@@ -647,7 +593,6 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
                     mime="text/plain",
                 )
             
-            # Download PDF
             with col3:
                 try:
                     pdf_data = create_pdf_with_image(report, img_temp_path, graph_period)
@@ -656,12 +601,10 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
                         data=pdf_data,
                         file_name="WSP_Analysis_Report.pdf",
                         mime="application/pdf",
-                        
                     )
                 except Exception as e:
                     st.warning(f"PDF generation failed: {e}")
         
-        # Cleanup
         if img_temp_path and os.path.exists(img_temp_path):
             os.unlink(img_temp_path)
     
