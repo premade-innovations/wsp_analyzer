@@ -37,10 +37,21 @@ with st.sidebar:
         "🟩 Green Pulse: Dump Valve Active\n\n"
         "🔵 Blue Pulse: Dump Valve Closure\n\n"
     )
-    if os.getenv("GEMINI_API_KEY"):
+    if st.secrets.get("GEMINI_API_KEY"):
         st.success("System Status: Online 🟢")
     else:
         st.error("System Status: Offline 🔴")
+    
+    # Debug: Show available models
+    if st.checkbox("Show Available Models"):
+        with st.spinner("Fetching models..."):
+            try:
+                st.write("**Available Gemini Models:**")
+                for m in genai.list_models():
+                    if 'generateContent' in m.supported_generation_methods:
+                        st.write(f"✅ `{m.name}`")
+            except Exception as e:
+                st.error(f"Could not list models: {e}")
 
 # ===============================
 # HELPERS
@@ -132,7 +143,7 @@ def create_pdf_with_image(text, image_path, graph_period):
     return pdf.output(dest="S").encode("latin-1")
 
 # ===============================
-# GEMINI ANALYSIS (FIXED)
+# GEMINI ANALYSIS (FIXED WITH MULTIPLE MODEL FALLBACK)
 # ===============================
 def analyze_pdf(file_path):
     try:
@@ -140,29 +151,49 @@ def analyze_pdf(file_path):
         if image is None:
             return "Error: Could not extract image from PDF"
 
-        # Use the correct multimodal model name
-        model = genai.GenerativeModel("gemini-1.5-flash")
-
-        response = model.generate_content(
-            [
-                PROMPT,
-                image
-            ]
-        )
-
-        return response.text if response and response.text else "Empty response"
+        # Try multiple model names in order of preference
+        model_names = [
+            "gemini-1.5-flash-latest",
+            "gemini-1.5-flash",
+            "gemini-1.5-pro-latest",
+            "gemini-1.5-pro",
+            "models/gemini-1.5-flash-latest",
+            "models/gemini-1.5-flash",
+            "models/gemini-1.5-pro-latest",
+            "models/gemini-1.5-pro"
+        ]
+        
+        last_error = None
+        
+        for model_name in model_names:
+            try:
+                st.info(f"Trying model: {model_name}")
+                model = genai.GenerativeModel(model_name)
+                
+                response = model.generate_content(
+                    [
+                        PROMPT,
+                        image
+                    ]
+                )
+                
+                if response and response.text:
+                    st.success(f"✅ Successfully used model: {model_name}")
+                    return response.text
+                    
+            except Exception as e:
+                last_error = str(e)
+                if "404" not in str(e):
+                    # If it's not a 404 error, it might be serious
+                    st.warning(f"Model {model_name} failed: {e}")
+                continue
+        
+        # If all models failed, return detailed error
+        return f"Error: Could not find working model. Last error: {last_error}\n\nPlease check your API key and ensure you have access to Gemini models."
 
     except Exception as e:
         return f"Error: {e}"
 
-def list_available_models():
-    """Helper to debug available models"""
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                st.write(f"✅ {m.name}")
-    except Exception as e:
-        st.error(f"Could not list models: {e}")
 # ===============================
 # UI
 # ===============================
@@ -279,7 +310,7 @@ CRITICAL INSTRUCTIONS
 7. Be concise but technically accurate
 8. If you cannot determine something, state "Cannot determine from graph" rather than guessing
 
-        """
+"""
 
 # ===============================
 # EXECUTION
@@ -289,7 +320,7 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
         tmp.write(uploaded_file.getvalue())
         tmp_path = tmp.name
 
-    with st.spinner("Analyzing with Gemini Flash…"):
+    with st.spinner("Analyzing with Gemini..."):
         graph_period = extract_graph_period(tmp_path)
         image = pdf_to_image(tmp_path)
 
@@ -306,11 +337,12 @@ if uploaded_file and st.button("Generate Diagnostic Report"):
         if image:
             st.image(image, caption="WSP Graph")
 
-        st.download_button(
-            "📄 Download PDF Report",
-            create_pdf_with_image(report, img_path, graph_period),
-            file_name="WSP_Report.pdf",
-            mime="application/pdf"
-        )
+        if not report.startswith("Error:"):
+            st.download_button(
+                "📄 Download PDF Report",
+                create_pdf_with_image(report, img_path, graph_period),
+                file_name="WSP_Report.pdf",
+                mime="application/pdf"
+            )
 
     os.unlink(tmp_path)
