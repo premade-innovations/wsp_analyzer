@@ -13,7 +13,7 @@ import fitz  # PyMuPDF
 # ===============================
 # GEMINI CONFIG
 # ===============================
-genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
+genai.configure(api_key=st.secrets["GEMINI_API_KEY"])
 
 # ===============================
 # PAGE CONFIG
