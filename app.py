@@ -154,7 +154,15 @@ def analyze_pdf(file_path):
 
     except Exception as e:
         return f"Error: {e}"
-        
+
+def list_available_models():
+    """Helper to debug available models"""
+    try:
+        for m in genai.list_models():
+            if 'generateContent' in m.supported_generation_methods:
+                st.write(f"✅ {m.name}")
+    except Exception as e:
+        st.error(f"Could not list models: {e}")
 # ===============================
 # UI
 # ===============================
