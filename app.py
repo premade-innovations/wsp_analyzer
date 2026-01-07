@@ -136,18 +136,16 @@ def create_pdf_with_image(text, image_path, graph_period):
 # ===============================
 def analyze_pdf(file_path):
     try:
-        with open(file_path, "rb") as f:
-            pdf_bytes = f.read()
+        image = pdf_to_image(file_path)
+        if image is None:
+            return "Error: Could not extract image from PDF"
 
-        model = genai.GenerativeModel("gemini-1.0-pro-vision")
+        model = genai.GenerativeModel("models/gemini-1.0-pro")
 
         response = model.generate_content(
             [
                 PROMPT,
-                {
-                    "mime_type": "application/pdf",
-                    "data": pdf_bytes
-                }
+                image
             ]
         )
 
